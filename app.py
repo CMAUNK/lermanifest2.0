@@ -28,7 +28,7 @@ st.markdown(
 <style>
 .stDownloadButton > button {
     background-color: #d62828;
-    color: white;
+    color: red;
     border: none;
     border-radius: 8px;
     padding: .6rem 1.2rem;
@@ -294,5 +294,6 @@ if files:
     )
 else:
     st.info("Envie 1 ou mais PDFs de manifesto para extrair automaticamente.")
+
 
 
