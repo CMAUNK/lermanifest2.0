@@ -299,7 +299,10 @@ if files:
             st.success(f"✅ {f.name} | {result['destino'] or 'Destino indefinido'}") if ok \
                 else st.warning(f"⚠️ {f.name} — faltou algum campo")
         except Exception as e:
-            st.error(f"Erro ao processar {f.name}: {e}")
+                    except Exception as e:
+            # Não exibe mensagem nenhuma; segue para o próximo arquivo
+            continue
+
 
     df = pd.DataFrame(linhas, columns=["MANIFESTO","DATA","HORA","DESTINO","VALOR TOTAL (R$)","VOLUMES","RESPONSÁVEL"])
     st.subheader("Prévia — MANIFESTOS")
@@ -316,3 +319,4 @@ if files:
     )
 else:
     st.info("Envie 1 ou mais PDFs de manifesto para extrair automaticamente.")
+
