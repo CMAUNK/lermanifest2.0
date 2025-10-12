@@ -189,9 +189,26 @@ def process_pdf(file_bytes, want_debug=False):
 
     # Valor total (aceita 4.390,56 / 4390,56 / 4,390.56 etc)
     if not out["valor"]:
-        m_val = re.search(r"VALOR\s+TOTAL\s+DO\s+MANIFESTO\s*[:\-]?\s*([0-9\.\,]+)", ocrL, re.I)
+        m_val = re.search(r"VALOR\s+TOTAL\s+DO\s+MANIFESTO\s*[:\-]?\s*([0-9\.,\s]+)", ocrL, re.I)
         if m_val:
-            out["valor"] = clean_money(m_val.group(1))
+            val_raw = m_val.group(1).strip()
+            # Pega até dois números após o ponto ou vírgula final
+            val_match = re.search(r"(\d[\d\.,]*\d)", val_raw)
+            if val_match:
+                val_text = val_match.group(1)
+                val_text = val_text.replace(" ", "")
+                # se houver mais de um ponto e uma vírgula, assume último como decimal
+                if val_text.count(",") > 1 and "." in val_text:
+                    val_text = val_text.replace(",", "")
+                elif val_text.count(".") > 1 and "," in val_text:
+                    val_text = val_text.replace(".", "")
+                val_text = val_text.replace(".", "").replace(",", ".")
+                try:
+                    v = float(val_text)
+                    out["valor"] = f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                except:
+                    out["valor"] = val_text
+
 
     # Volumes
     if not out["volumes"]:
@@ -279,3 +296,4 @@ if files:
     )
 else:
     st.info("Envie 1 ou mais PDFs para processar. Use o checkbox de debug para ver o texto que o OCR está lendo e ajustar se necessário.")
+
