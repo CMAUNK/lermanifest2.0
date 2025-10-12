@@ -22,7 +22,7 @@ import streamlit as st
 # ==========================
 #  CONFIGURAÇÃO DA PÁGINA
 # ==========================
-st.set_page_config(page_title="Leitor de Manifestos Jadlog — OCR Final", page_icon="🚛", layout="centered")
+st.set_page_config(page_title="Leitor de Manifestos Jadlog ", page_icon="🚛", layout="centered")
 st.markdown(
     """
 <style>
@@ -294,3 +294,4 @@ if files:
     )
 else:
     st.info("Envie 1 ou mais PDFs de manifesto para extrair automaticamente.")
+
