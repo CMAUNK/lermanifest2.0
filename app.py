@@ -299,7 +299,7 @@ if files:
             st.success(f"✅ {f.name} | {result['destino'] or 'Destino indefinido'}") if ok \
                 else st.warning(f"⚠️ {f.name} — faltou algum campo")
         except Exception as e:
-                    except Exception as e:
+            except Exception as e:
             # Não exibe mensagem nenhuma; segue para o próximo arquivo
             continue
 
@@ -319,4 +319,5 @@ if files:
     )
 else:
     st.info("Envie 1 ou mais PDFs de manifesto para extrair automaticamente.")
+
 
