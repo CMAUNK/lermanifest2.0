@@ -1,6 +1,5 @@
 import re
 import io
-import fitz
 import streamlit as st
 import pandas as pd
 from pdf2image import convert_from_bytes
@@ -161,3 +160,4 @@ if uploaded_files:
         with pd.ExcelWriter(buffer, engine="xlsxwriter") as writer:
             df.to_excel(writer, index=False, sheet_name="Manifestos")
         st.download_button("📥 Baixar Planilha Operacional", buffer.getvalue(), "planilha_manifestos.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
