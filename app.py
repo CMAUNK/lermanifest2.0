@@ -300,8 +300,7 @@ if files:
                 else st.warning(f"⚠️ {f.name} — faltou algum campo")
             
             except Exception as e:
-            # Não exibe mensagem nenhuma; segue para o próximo arquivo
-            continue
+                continue
 
 
     df = pd.DataFrame(linhas, columns=["MANIFESTO","DATA","HORA","DESTINO","VALOR TOTAL (R$)","VOLUMES","RESPONSÁVEL"])
@@ -319,6 +318,7 @@ if files:
     )
 else:
     st.info("Envie 1 ou mais PDFs de manifesto para extrair automaticamente.")
+
 
 
 
