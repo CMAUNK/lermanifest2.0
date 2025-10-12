@@ -205,7 +205,7 @@ def process_pdf(file_bytes, want_debug=False):
 
     if want_debug:
         with st.expander("🔍 Mostrar Debug Completo do OCR", expanded=False):
-        st.markdown("### 🧠 Texto Bruto Extraído (para diagnóstico)")
+            st.markdown("### 🧠 Texto Bruto Extraído (para diagnóstico)")
         with st.expander("🗂️ OCR — 1ª Página (Cabeçalho / Manifesto)", expanded=False):
             st.code(out["debug"].get("OCR_1a_PAG", "(sem texto)"))
         with st.expander("📄 OCR — Última Página (Valor / Volumes)", expanded=False):
@@ -259,6 +259,7 @@ if files:
     )
 else:
     st.info("Envie 1 ou mais PDFs de manifesto para extrair automaticamente.")
+
 
 
 
