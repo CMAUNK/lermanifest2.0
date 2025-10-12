@@ -154,7 +154,7 @@ def extract_manifesto_destino_from_text(full_text: str):
         if rota_code in ROTA_CO_MAP:
             destino = ROTA_CO_MAP[rota_code]
         else:
-        destino = ""
+            destino = ""
 else:
     destino = ""
 
@@ -325,6 +325,7 @@ if files:
     )
 else:
     st.info("Envie 1 ou mais PDFs de manifesto para extrair automaticamente.")
+
 
 
 
