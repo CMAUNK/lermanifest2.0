@@ -202,51 +202,6 @@ def process_pdf(file_bytes, want_debug=False):
                 out["destino"] = f"{cidade.strip().upper()} - {uf.upper()}"
                 break
 
-        # ---- MAPEAMENTO DE COs (Códigos Operacionais) ----
-    CODIGOS_CO = {
-        "S10": "CO GUAPIMIRIM",
-        "S12": "CO RIO DE JANEIRO 13",
-        "S16": "CO QUEIMADOS",
-        "S18": "CO SAO JOAO DE MERITI 01",
-        "S20": "ML BELFORD ROXO 01",
-        "S21": "CO JUIZ DE FORA",
-        "S22": "DL DUQUE DE CAXIAS",
-        "S24": "CO ITABORAI",
-        "S25": "CO VOLTA REDONDA",
-        "S27": "CO RIO DE JANEIRO 05",
-        "S28": "CO RIO DE JANEIRO 04",
-        "S30": "CO RIO DE JANEIRO 01",
-        "S31": "CO JUIZ DE FORA",
-        "S32": "CO RIO DE JANEIRO 03",
-        "S37": "CO TRES RIOS",
-        "S38": "CO RIO DE JANEIRO 06",
-        "S41": "CO RIO DE JANEIRO 08",
-        "S43": "CO ANGRA DOS REIS",
-        "S45": "CO PARATY",
-        "S48": "CO PETROPOLIS",
-        "S49": "CO RIO DE JANEIRO 07",
-        "S54": "CO NOVA FRIBURGO",
-        "S56": "CO TERESOPOLIS",
-        "S58": "CO CAMPOS D. GOYTACAZES",
-        "S59": "CO SANT. ANT DE PADUA",
-        "S60": "CO DUQUE DE CAXAIS",
-        "S61": "CO CABO FRIO",
-        "S63": "CO ARARUAMA",
-        "S64": "CO SAO GONCALO",
-        "S65": "CO RIO DAS OSTRAS",
-        "S67": "CO NITEROI",
-        "S68": "CO MARICÁ",
-        "S70": "FL RIO DE JANEIRO"
-    }
-
-    # ---- DETECTA CÓDIGO CO NA PRIMEIRA PÁGINA ----
-    m_co = re.search(r"\b(S\d{2})\b", ocrL)
-    if m_co:
-        co_code = m_co.group(1)
-        if co_code in CODIGOS_CO:
-            out["destino"] = f"{CODIGOS_CO[co_code]} ({co_code})"
-
-
     if want_debug:
         st.subheader("🔬 Debug do OCR (texto bruto)")
         with st.expander("OCR — 1ª Página (cabeçalho/manifesto)"):
@@ -302,6 +257,5 @@ if files:
     )
 else:
     st.info("Envie 1 ou mais PDFs de manifesto para extrair automaticamente.")
-
 
 
