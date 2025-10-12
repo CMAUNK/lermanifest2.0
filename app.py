@@ -148,9 +148,16 @@ def extract_manifesto_destino_from_text(full_text: str):
         manifesto = m2.group(1) if m2 else ""
 
     # Destino via rota Sxx
-    rota = re.search(r"\bS\d{1,2}\b", norm)
-    if rota and rota.group(0).upper() in ROTA_CO_MAP:
-        destino = ROTA_CO_MAP[rota.group(0).upper()]
+    rota = re.search(r"\bS\s*([0-9]{1,2})\b|S\s*([0-9]{1,2})(?=[^0-9A-Z]|$)", norm)
+    if rota:
+    rota_code = "S" + (rota.group(1) or rota.group(2) or "").strip()
+    if rota_code in ROTA_CO_MAP:
+        destino = ROTA_CO_MAP[rota_code]
+    else:
+        destino = ""
+else:
+    destino = ""
+
     else:
         # cidade - UF (pega último match)
         destino = ""
@@ -318,6 +325,7 @@ if files:
     )
 else:
     st.info("Envie 1 ou mais PDFs de manifesto para extrair automaticamente.")
+
 
 
 
