@@ -152,24 +152,42 @@ def process_pdf(file_bytes, want_debug=False):
     imgL, ocrL = ocr_page_bytes(file_bytes, page_index="last", dpi=500)
     out["debug"]["OCR_ULTIMA_PAG"] = ocrL
 
-    # ---- NOVA REGEX APRIMORADA DO VALOR ----
+    # ---- CAPTURA INTELIGENTE DO VALOR TOTAL ----
     if not out["valor"]:
-        m_val = re.search(r"VALOR\s+TOTAL\s+DO\s+MANIFESTO\s*[:\-]?\s*([0-9\.,\s]+)", ocrL, re.I)
-        if m_val:
-            val_raw = m_val.group(1).strip()
-            val_match = re.search(r"(\d[\d\.,]*\d)", val_raw)
-            if val_match:
-                val_text = val_match.group(1).replace(" ", "")
-                if val_text.count(",") > 1 and "." in val_text:
+        # tenta pegar a linha inteira após "VALOR TOTAL DO MANIFESTO"
+        linha_valor = ""
+        for linha in ocrL.splitlines():
+            if "VALOR TOTAL DO MANIFESTO" in linha:
+                linha_valor = linha.strip()
+                break
+        if linha_valor:
+            # captura o número com tudo (pontuação, espaço, vírgula)
+            m_val = re.search(r"VALOR\s+TOTAL\s+DO\s+MANIFESTO\s*[:\-]?\s*([\d\s\.,]+)", linha_valor, re.I)
+            if m_val:
+                val_text = m_val.group(1)
+                val_text = val_text.replace(" ", "").strip()
+
+                # remove símbolos errados, mantém só números e separadores
+                val_text = re.sub(r"[^0-9\.,]", "", val_text)
+
+                # determina qual é o separador decimal (último símbolo)
+                if "." in val_text and "," in val_text:
+                    # define o último símbolo como decimal
+                    if val_text.rfind(".") > val_text.rfind(","):
+                        val_text = val_text.replace(",", "")
+                    else:
+                        val_text = val_text.replace(".", "").replace(",", ".")
+                elif "," in val_text:
+                    val_text = val_text.replace(".", "").replace(",", ".")
+                else:
                     val_text = val_text.replace(",", "")
-                elif val_text.count(".") > 1 and "," in val_text:
-                    val_text = val_text.replace(".", "")
-                val_text = val_text.replace(".", "").replace(",", ".")
+
                 try:
                     v = float(val_text)
                     out["valor"] = f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
                 except:
                     out["valor"] = val_text
+
 
     if not out["volumes"]:
         m_vol = re.search(r"\bVOLUMES?\b\s*[:\-]?\s*([0-9]{1,6})\b", ocrL, re.I)
@@ -239,3 +257,4 @@ if files:
     )
 else:
     st.info("Envie 1 ou mais PDFs de manifesto para extrair automaticamente.")
+
