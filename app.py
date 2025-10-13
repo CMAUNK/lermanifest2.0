@@ -251,7 +251,7 @@ def process_pdf(file_bytes: bytes, want_debug: bool = False):
 #  INTERFACE
 # ==========================
 st.title("📦 Leitor de Manifestos Jadlog")
-st.caption("Extrai Manifesto, Data, Hora, Destino, Valor Total e Volumes — texto nativo + OCR de fallback (1ª e última página).")
+st.caption("Extrai Manifesto, Data, Hora, Destino, Valor Total e Volumes")
 
 responsavel = st.text_input("Responsável", placeholder="Digite o nome completo")
 want_debug = st.checkbox("Mostrar debug do OCR (texto bruto)", value=False)
@@ -294,6 +294,7 @@ if files:
     )
 else:
     st.info("Envie 1 ou mais PDFs de manifesto para extrair automaticamente.")
+
 
 
 
