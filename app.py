@@ -1,10 +1,12 @@
+
 # app.py
 # -----------------------------------------------
-# Leitor de Manifestos Jadlog — OCR Final (v4.6)
-# - Extrai Manifesto, Data, Hora, Destino, Valor Total e Volumes
+# Leitor de Manifestos Jadlog — OCR Final (v4.7)
+# - Extrai Manifesto, Data, Destino, Valor Total e Quantidade (Volumes)
 # - Usa texto nativo do PDF quando possível (pdfplumber)
 # - Faz OCR de 1ª e última página como fallback (pytesseract + pdf2image)
 # - Mapeamento de COs via códigos Sxx
+# - Planilha final: Data; Manifesto; Destino; Referência; Responsável; Valor total; Quantidade
 # -----------------------------------------------
 
 import io
@@ -22,7 +24,7 @@ import streamlit as st
 # ==========================
 #  CONFIGURAÇÃO DA PÁGINA
 # ==========================
-st.set_page_config(page_title="Leitor de Manifestos Jadlog ", page_icon="🚛", layout="centered")
+st.set_page_config(page_title="Leitor de Manifestos Jadlog", page_icon="🚛", layout="centered")
 st.markdown(
     """
 <style>
@@ -128,8 +130,8 @@ def extract_data_hora_from_head(first_page_text: str):
         "jan": "01", "fev": "02", "mar": "03", "abr": "04", "mai": "05", "jun": "06",
         "jul": "07", "ago": "08", "set": "09", "out": "10", "nov": "11", "dez": "12"
     }
-    dia, mes_txt, ano, hora = m.groups()
-    return f"{int(dia):02d}/{meses.get(mes_txt.lower(),'')}/{ano}", hora
+    dia, mes_txt, ano, _hora = m.groups()
+    return f"{int(dia):02d}/{meses.get(mes_txt.lower(),'')}/{ano}", _hora  # _hora não será usada na planilha
 
 def extract_manifesto_destino_from_text(full_text: str):
     norm = normalize(full_text)
@@ -141,7 +143,7 @@ def extract_manifesto_destino_from_text(full_text: str):
         m2 = re.search(r"\b(\d{10,15})\b", norm)
         manifesto = m2.group(1) if m2 else ""
 
-    # Destino via rota Sxx
+    # Destino via rota Sxx (tolerante a colagens do OCR)
     rota = re.search(r"\bS\s*([0-9]{1,2})\b|S\s*([0-9]{1,2})(?=[^0-9A-Z]|$)", norm)
     if rota:
         rota_code = "S" + (rota.group(1) or rota.group(2) or "").strip()
@@ -177,14 +179,16 @@ def ocr_page_bytes(file_bytes: bytes, page_index="first", dpi=500):
 def process_pdf(file_bytes: bytes, want_debug: bool = False):
     out = {"manifesto": "", "data": "", "hora": "", "destino": "", "valor": "", "volumes": "", "debug": {}}
 
+    # Texto nativo (melhor quando disponível)
     pages_txt = read_pdf_text(file_bytes)
     if pages_txt:
         out["data"], out["hora"] = extract_data_hora_from_head(pages_txt[0])
         manifesto, destino = extract_manifesto_destino_from_text("\n".join(pages_txt))
         out["manifesto"], out["destino"] = manifesto, destino
 
+    # Fallback OCR 1ª página p/ Manifesto
     if not out["manifesto"]:
-        img1, ocr1 = ocr_page_bytes(file_bytes, page_index="first", dpi=500)
+        _img1, ocr1 = ocr_page_bytes(file_bytes, page_index="first", dpi=500)
         out["debug"]["OCR_1a_PAG"] = ocr1
         m = re.search(r"\b(?:NUM[EÉ]RO|N[ºO])\s*[:\-]?\s*(\d{8,})", ocr1, re.I)
         if not m:
@@ -192,9 +196,11 @@ def process_pdf(file_bytes: bytes, want_debug: bool = False):
         if m:
             out["manifesto"] = m.group(1)
 
-    imgL, ocrL = ocr_page_bytes(file_bytes, page_index="last", dpi=500)
+    # OCR última página para Valor/Volumes/Destino
+    _imgL, ocrL = ocr_page_bytes(file_bytes, page_index="last", dpi=500)
     out["debug"]["OCR_ULTIMA_PAG"] = ocrL
 
+    # Valor total (robusto a separadores)
     if not out["valor"]:
         linha_valor = ""
         for linha in (ocrL or "").splitlines():
@@ -224,11 +230,13 @@ def process_pdf(file_bytes: bytes, want_debug: bool = False):
                 except Exception:
                     out["valor"] = val_text
 
+    # Volumes
     if not out["volumes"]:
         m_vol = re.search(r"\bVOLUMES?\b\s*[:\-]?\s*([0-9]{1,6})\b", ocrL or "", re.I)
         if m_vol:
             out["volumes"] = clean_int(m_vol.group(1))
 
+    # Destino (fallback pelo OCR se não veio do texto)
     if not out["destino"]:
         mds = list(re.finditer(r"([A-ZÇÃÕÉÍÓÚÂÊÔÜ ]+)\s*-\s*([A-Z]{2})", ocrL or ""))
         for m in reversed(mds):
@@ -237,6 +245,7 @@ def process_pdf(file_bytes: bytes, want_debug: bool = False):
                 out["destino"] = f"{cidade.strip().upper()} - {uf.upper()}"
                 break
 
+    # Debug recolhível
     if want_debug:
         with st.expander("🔍 Mostrar Debug Completo do OCR", expanded=False):
             st.markdown("### 🧠 Texto Bruto Extraído (para diagnóstico)")
@@ -251,7 +260,7 @@ def process_pdf(file_bytes: bytes, want_debug: bool = False):
 #  INTERFACE
 # ==========================
 st.title("📦 Leitor de Manifestos Jadlog")
-st.caption("Extrai Manifesto, Data, Hora, Destino, Valor Total e Volumes")
+st.caption("Extrai Manifesto, Data, Destino, Valor Total e Quantidade (Volumes) — com OCR de fallback quando necessário.")
 
 responsavel = st.text_input("Responsável", placeholder="Digite o nome completo")
 want_debug = st.checkbox("Mostrar debug do OCR (texto bruto)", value=False)
@@ -264,22 +273,31 @@ if files:
         try:
             f_bytes = f.read()
             result = process_pdf(f_bytes, want_debug=want_debug)
+
+            # ---- Linha no formato final solicitado ----
             linhas.append({
-                "MANIFESTO": result["manifesto"],
-                "DATA": result["data"],
-                "HORA": result["hora"],
-                "DESTINO": result["destino"],
-                "VALOR TOTAL (R$)": result["valor"],
-                "VOLUMES": result["volumes"],
-                "RESPONSÁVEL": (responsavel or "").upper()
+                "Data": result["data"],
+                "Manifesto": result["manifesto"],
+                "Destino": result["destino"],
+                "Referência": "",  # se preferir, use f.name
+                "Responsável": (responsavel or "").upper(),
+                "Valor total": result["valor"],
+                "Quantidade": result["volumes"],
             })
-            ok = all([result["manifesto"], result["data"], result["hora"], result["destino"]])
+
+            ok = all([result["manifesto"], result["data"], result["destino"]])
             st.success(f"✅ {f.name} | {result['destino'] or 'Destino indefinido'}") if ok \
                 else st.warning(f"⚠️ {f.name} — faltou algum campo")
         except Exception:
+            # silencioso: não exibe banner vermelho
             continue
 
-    df = pd.DataFrame(linhas, columns=["MANIFESTO", "DATA", "HORA", "DESTINO", "VALOR TOTAL (R$)", "VOLUMES", "RESPONSÁVEL"])
+    # ---- DataFrame na ordem definida ----
+    df = pd.DataFrame(
+        linhas,
+        columns=["Data", "Manifesto", "Destino", "Referência", "Responsável", "Valor total", "Quantidade"]
+    )
+
     st.subheader("Prévia — MANIFESTOS")
     st.dataframe(df, use_container_width=True, hide_index=True)
 
@@ -294,8 +312,3 @@ if files:
     )
 else:
     st.info("Envie 1 ou mais PDFs de manifesto para extrair automaticamente.")
-
-
-
-
-
