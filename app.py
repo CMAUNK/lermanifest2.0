@@ -172,6 +172,72 @@ def extract_manifesto_destino_from_text(full_text: str):
     return manifesto, destino
 
 # ==========================
+#  HELPERS PARA VALORES
+# ==========================
+def find_monetary_candidates(text: str):
+    """
+    Retorna lista de strings que parecem valores monetários ou números com separadores.
+    Ex: '26,475.41', '26.475,41', '26475.41', '26 475,41'
+    """
+    if not text:
+        return []
+    # busca padrões com grupos de milhares e decimais
+    pattern = r"(?:(?:\d{1,3}(?:[.\s]\d{3})*(?:[,\.\s]\d{1,2})?)|\d+[\.,]\d+)"
+    matches = re.findall(pattern, text)
+    # dedupe e strip
+    seen = []
+    for m in matches:
+        mm = m.strip()
+        if mm and mm not in seen:
+            seen.append(mm)
+    return seen
+
+def try_parse_amount(s: str):
+    """
+    Tenta converter string numérica em float (valor em unidades),
+    tentando interpretar corretamente separadores.
+    Retorna float ou None.
+    """
+    if not s:
+        return None
+    cur = s.strip().replace(" ", "")
+    # remove non-digit, dot, comma
+    cur = re.sub(r"[^\d\.,]", "", cur)
+    # if both '.' and ',' present, decide by last occurrence
+    if "." in cur and "," in cur:
+        if cur.rfind(",") > cur.rfind("."):
+            # comma likely decimal separator: remove dots (thousands), replace comma by dot
+            try:
+                norm = cur.replace(".", "").replace(",", ".")
+                return float(norm)
+            except:
+                return None
+        else:
+            # dot likely decimal separator: remove commas
+            try:
+                norm = cur.replace(",", "")
+                return float(norm)
+            except:
+                return None
+    # only comma
+    if "," in cur and "." not in cur:
+        try:
+            return float(cur.replace(".", "").replace(",", "."))
+        except:
+            return None
+    # only dot
+    if "." in cur and "," not in cur:
+        try:
+            return float(cur.replace(",", ""))
+        except:
+            return None
+    # only digits
+    try:
+        return float(cur)
+    except:
+        return None
+
+# ==========================
 #  PROCESSAMENTO DE CADA PDF
 # ==========================
 def process_pdf(file_bytes: bytes, progress_bar=None, want_debug: bool = False):
@@ -239,8 +305,10 @@ def process_pdf(file_bytes: bytes, progress_bar=None, want_debug: bool = False):
         out["volumes"] = str(total_volumes)
 
     # 4) VALOR TOTAL — TENTAR PDFNATIVE (última página) PRIMEIRO, DEPOIS OCR
-    # 4.1 tentar com pdfplumber (última página)
     valor_encontrado = ""
+
+    # 4.1 tentar com pdfplumber (última página)
+    last_text = ""
     try:
         with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
             try:
@@ -250,54 +318,63 @@ def process_pdf(file_bytes: bytes, progress_bar=None, want_debug: bool = False):
     except Exception:
         last_text = ""
 
+    # coleta candidatos do texto nativo
+    candidates = []
     if last_text:
-        # Padrões comuns
-        m_val = re.search(r"VALOR\s+TOTAL\s+DO\s+MANIFESTO\s*[:\-]?\s*([\d\.\,\s]+)", last_text, re.I)
-        if not m_val:
-            # também tenta linhas que apenas contem valor no final, ex: " ... 26,475.41" ou "26.475,41"
-            m_val = re.search(r"([\d]{1,3}(?:[.\s]\d{3})*(?:[,\.\s]\d{1,2})?)\s*$", last_text, re.M)
-        if m_val:
-            valor_encontrado = m_val.group(1).strip()
+        # procurar explicitamente próximas ocorrências à expressão VALOR
+        # pega linha inteira onde apareça VALOR
+        for line in last_text.splitlines():
+            if re.search(r"VALOR\s+TOTAL", line, re.I) or re.search(r"VALOR\s+TOTAL\s+DO", line, re.I) or re.search(r"VALOR\s*:", line, re.I):
+                candidates += find_monetary_candidates(line)
+        # se não achar via VALOR, coletar todos candidatos na última página
+        if not candidates:
+            candidates = find_monetary_candidates(last_text)
 
-    # 4.2 fallback: OCR última página (se não achou no texto nativo)
-    if not valor_encontrado:
+    # 4.2 fallback OCR última página (se não achou candidatos ou quiser reforçar)
+    if not candidates:
         try:
             last_img = pil_preprocess(images[-1])
             ocr_last = ocr_page_quick(last_img)
-            # procurar padrão "VALOR TOTAL DO MANIFESTO"
-            m_val2 = re.search(r"VALOR\s+TOTAL\s+DO\s+MANIFESTO\s*[:\-]?\s*([\d\.\,\s]+)", ocr_last, re.I)
-            if not m_val2:
-                m_val2 = re.search(r"([\d]{1,3}(?:[.\s]\d{3})*(?:[,\.\s]\d{1,2})?)\s*$", ocr_last, re.M)
-            if m_val2:
-                valor_encontrado = m_val2.group(1).strip()
+            # prefer lines near "VALOR"
+            for line in ocr_last.splitlines():
+                if re.search(r"VALOR\s+TOTAL", line, re.I) or re.search(r"VALOR\s*:", line, re.I):
+                    candidates += find_monetary_candidates(line)
+            if not candidates:
+                candidates = find_monetary_candidates(ocr_last)
         except Exception:
-            valor_encontrado = ""
+            candidates = []
 
-    # 4.3 normalizar valor para formato brasileiro "xx.xxx,yy"
-    if valor_encontrado:
-        val_text = valor_encontrado.replace(" ", "").strip()
-        val_text = re.sub(r"[^0-9\.,]", "", val_text)
-        # Normalização inteligente: se ambos pontos e vírgulas existem, inferir separador decimal
+    # 4.3 interpretar candidatos e escolher o melhor
+    parsed = []
+    for s in candidates:
+        v = try_parse_amount(s)
+        if v is not None:
+            parsed.append((s, v))
+    chosen_value = None
+    if parsed:
+        # priorizar candidatos extraídos de linhas que contenham "VALOR" (se existirem)
+        valor_pref = []
+        if last_text:
+            for s, v in parsed:
+                # if s appears in a line with 'VALOR' prefer it
+                for line in last_text.splitlines():
+                    if s in line and re.search(r"VALOR", line, re.I):
+                        valor_pref.append((s, v))
+            if valor_pref:
+                # escolhe o maior entre preferenciais
+                chosen_value = max(valor_pref, key=lambda x: x[1])[1]
+        if chosen_value is None:
+            # escolhe o maior valor plausível (normalmente o total é o maior número da página)
+            chosen_value = max(parsed, key=lambda x: x[1])[1]
+
+    # 4.4 formatar valor no padrão BR
+    if chosen_value is not None:
         try:
-            if "." in val_text and "," in val_text:
-                # se último separador é vírgula, vírgula é decimal
-                if val_text.rfind(",") > val_text.rfind("."):
-                    val_text = val_text.replace(".", "")
-                    val_float = float(val_text.replace(",", "."))
-                else:
-                    val_text = val_text.replace(",", "")
-                    val_float = float(val_text)
-            elif "," in val_text and "." not in val_text:
-                # vírgula decimal
-                val_float = float(val_text.replace(".", "").replace(",", "."))
-            else:
-                # ponto decimal ou só números
-                val_float = float(val_text.replace(",", ""))
-            # formata no padrão BR: 12345.67 -> 12.345,67
+            val_float = float(chosen_value)
             out["valor"] = f"{val_float:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
         except Exception:
-            # se parsing falhar, armazena o texto bruto limpo
-            out["valor"] = val_text
+            # fallback: armazena o texto bruto do candidato escolhido
+            out["valor"] = str(chosen_value)
 
     # 5) DESTINO fallback por OCR da última página (se ainda não detectado)
     if not out["destino"]:
@@ -318,8 +395,10 @@ def process_pdf(file_bytes: bytes, progress_bar=None, want_debug: bool = False):
     if want_debug:
         out["debug"] = {
             "pages_txt_count": len(pages_txt),
-            "ocr_first_page": ocr_texts_per_page[0] if ocr_texts_per_page else "",
-            "ocr_last_page": ocr_texts_per_page[-1] if ocr_texts_per_page else "",
+            "last_text_preview": last_text[:500] if last_text else "",
+            "ocr_last_preview": ocr_texts_per_page[-1][:500] if ocr_texts_per_page else "",
+            "candidates": candidates,
+            "parsed": parsed,
         }
 
     return out
