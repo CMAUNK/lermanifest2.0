@@ -1,12 +1,9 @@
-
 # app.py
 # -----------------------------------------------
-# Leitor de Manifestos Jadlog — OCR Final (v4.7)
-# - Extrai Manifesto, Data, Destino, Valor Total e Quantidade (Volumes)
+# Leitor de Manifestos Jadlog — OCR Final (v5.0)
+# - Extrai Manifesto, Data, Destino (CO via Sxx ou Destinatário), Valor e Volumes
 # - Usa texto nativo do PDF quando possível (pdfplumber)
-# - Faz OCR de 1ª e última página como fallback (pytesseract + pdf2image)
-# - Mapeamento de COs via códigos Sxx
-# - Planilha final: Data; Manifesto; Destino; Referência; Responsável; Valor total; Quantidade
+# - Fallback via OCR com Tesseract + pdf2image
 # -----------------------------------------------
 
 import io
@@ -22,11 +19,10 @@ from PIL import ImageOps, ImageFilter
 import streamlit as st
 
 # ==========================
-#  CONFIGURAÇÃO DA PÁGINA
+#  CONFIGURAÇÃO STREAMLIT
 # ==========================
 st.set_page_config(page_title="Leitor de Manifestos Jadlog", page_icon="🚛", layout="centered")
-st.markdown(
-    """
+st.markdown("""
 <style>
 .stDownloadButton > button {
     background-color: #d62828;
@@ -40,12 +36,10 @@ st.markdown(
     background-color: #6c757d;
 }
 </style>
-""",
-    unsafe_allow_html=True,
-)
+""", unsafe_allow_html=True)
 
 # ==========================
-#  CONSTANTES / MAPAS
+#  MAPA DE ROTAS Sxx → CO
 # ==========================
 ROTA_CO_MAP = {
     "S10": "CO GUAPIMIRIM",
@@ -82,9 +76,10 @@ ROTA_CO_MAP = {
     "S68": "CO MARICÁ",
     "S70": "FL RIO DE JANEIRO",
 }
+
 UF_VALIDAS = {
-    "AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA", "MG", "MS", "MT", "PA",
-    "PB", "PE", "PI", "PR", "RJ", "RN", "RO", "RR", "RS", "SC", "SE", "SP", "TO"
+    "AC","AL","AM","AP","BA","CE","DF","ES","GO","MA","MG","MS","MT",
+    "PA","PB","PE","PI","PR","RJ","RN","RO","RR","RS","SC","SE","SP","TO"
 }
 
 # ==========================
@@ -127,41 +122,58 @@ def extract_data_hora_from_head(first_page_text: str):
     if not m:
         return "", ""
     meses = {
-        "jan": "01", "fev": "02", "mar": "03", "abr": "04", "mai": "05", "jun": "06",
-        "jul": "07", "ago": "08", "set": "09", "out": "10", "nov": "11", "dez": "12"
+        "jan":"01","fev":"02","mar":"03","abr":"04","mai":"05","jun":"06",
+        "jul":"07","ago":"08","set":"09","out":"10","nov":"11","dez":"12"
     }
-    dia, mes_txt, ano, _hora = m.groups()
-    return f"{int(dia):02d}/{meses.get(mes_txt.lower(),'')}/{ano}", _hora  # _hora não será usada na planilha
+    dia, mes_txt, ano, hora = m.groups()
+    return f"{int(dia):02d}/{meses.get(mes_txt.lower(),'')}/{ano}", hora
 
+# ==========================
+#  REGRA FINAL DO DESTINO
+# ==========================
 def extract_manifesto_destino_from_text(full_text: str):
-    norm = normalize(full_text)
+    """
+    Regra FINAL:
+      1. Se houver Sxx mapeado → destino = CO da rota.
+      2. Se houver Sxx não mapeado → ignorar e usar o DESTINATÁRIO.
+      3. Se não houver Sxx → destino = DESTINATÁRIO.
+    """
+    norm = normalize(full_text).upper()
 
-    # Manifesto
-    m = re.search(r"\b(?:NUM[EÉ]RO|N[ºO])\s*:\s*(\d{8,})", norm, re.I)
+    # --- Manifesto ---
+    m = re.search(r"\b(?:NUM[EÉ]RO|N[ºO])\s*[:\-]?\s*(\d{8,15})\b", norm)
     manifesto = m.group(1) if m else ""
     if not manifesto:
         m2 = re.search(r"\b(\d{10,15})\b", norm)
         manifesto = m2.group(1) if m2 else ""
 
-    # Destino via rota Sxx (tolerante a colagens do OCR)
-    rota = re.search(r"\bS\s*([0-9]{1,2})\b|S\s*([0-9]{1,2})(?=[^0-9A-Z]|$)", norm)
-    if rota:
-        rota_code = "S" + (rota.group(1) or rota.group(2) or "").strip()
+    # --- Busca Sxx ---
+    rot = re.search(r"\bS[-\s]*([0-9]{1,2})\b", norm)
+
+    if rot:
+        rota_code = "S" + str(int(rot.group(1)))
+        # Caso Sxx esteja mapeado → usar CO correspondente
         if rota_code in ROTA_CO_MAP:
-            destino = ROTA_CO_MAP[rota_code]
-        else:
-            destino = ""
-    else:
-        destino = ""
-        matches = list(re.finditer(r"([A-ZÇÃÕÉÍÓÚÂÊÔÜ ]+)\s*-\s*([A-Z]{2})", norm))
-        for m in reversed(matches):
-            cidade, uf = m.groups()
-            if uf.upper() in UF_VALIDAS:
-                destino = f"{cidade.strip().upper()} - {uf.upper()}"
-                break
+            return manifesto, ROTA_CO_MAP[rota_code].upper()
+        # Se Sxx não estiver mapeado → seguir para DESTINATÁRIO
 
-    return manifesto, destino
+    # --- DESTINATÁRIO: última ocorrência de CIDADE - UF ---
+    matches = list(
+        re.finditer(r"([A-ZÇÃÕÉÍÓÚÂÊÔÜ\s\.]+?)\s*[-–]\s*([A-Z]{2})\b", norm)
+    )
 
+    if matches:
+        cidade, uf = matches[-1].groups()
+        cidade = cidade.strip()
+        uf = uf.strip().upper()
+        if uf in UF_VALIDAS:
+            return manifesto, f"{cidade} - {uf}"
+
+    return manifesto, ""
+
+# ==========================
+#  OCR
+# ==========================
 def ocr_page_bytes(file_bytes: bytes, page_index="first", dpi=500):
     images = convert_from_bytes(file_bytes, dpi=dpi, fmt="jpeg")
     if not images:
@@ -174,141 +186,110 @@ def ocr_page_bytes(file_bytes: bytes, page_index="first", dpi=500):
     return img_p, txt
 
 # ==========================
-#  PROCESSAMENTO
+#  PROCESSAMENTO DE PDF
 # ==========================
 def process_pdf(file_bytes: bytes, want_debug: bool = False):
     out = {"manifesto": "", "data": "", "hora": "", "destino": "", "valor": "", "volumes": "", "debug": {}}
 
-    # Texto nativo (melhor quando disponível)
     pages_txt = read_pdf_text(file_bytes)
+
     if pages_txt:
         out["data"], out["hora"] = extract_data_hora_from_head(pages_txt[0])
         manifesto, destino = extract_manifesto_destino_from_text("\n".join(pages_txt))
-        out["manifesto"], out["destino"] = manifesto, destino
+        out["manifesto"] = manifesto
+        out["destino"] = destino
 
-    # Fallback OCR 1ª página p/ Manifesto
+    # Fallback OCR manifesto
     if not out["manifesto"]:
-        _img1, ocr1 = ocr_page_bytes(file_bytes, page_index="first", dpi=500)
+        _, ocr1 = ocr_page_bytes(file_bytes, page_index="first", dpi=500)
         out["debug"]["OCR_1a_PAG"] = ocr1
-        m = re.search(r"\b(?:NUM[EÉ]RO|N[ºO])\s*[:\-]?\s*(\d{8,})", ocr1, re.I)
-        if not m:
-            m = re.search(r"\b(\d{10,15})\b", ocr1)
+        m = re.search(r"\b(?:NUM[EÉ]RO|N[ºO])\s*[:\-]?\s*(\d{8,15})\b", ocr1)
         if m:
             out["manifesto"] = m.group(1)
 
-    # OCR última página para Valor/Volumes/Destino
-    _imgL, ocrL = ocr_page_bytes(file_bytes, page_index="last", dpi=500)
+    # OCR última página
+    _, ocrL = ocr_page_bytes(file_bytes, page_index="last", dpi=500)
     out["debug"]["OCR_ULTIMA_PAG"] = ocrL
 
-    # Valor total (robusto a separadores)
+    # Valor total
     if not out["valor"]:
-        linha_valor = ""
-        for linha in (ocrL or "").splitlines():
-            if "VALOR TOTAL DO MANIFESTO" in linha:
-                linha_valor = linha.strip()
-                break
-        if linha_valor:
-            m_val = re.search(r"VALOR\s+TOTAL\s+DO\s+MANIFESTO\s*[:\-]?\s*([\d\s\.,]+)", linha_valor, re.I)
-            if m_val:
-                val_text = m_val.group(1)
-                val_text = val_text.replace(" ", "").strip()
-                val_text = re.sub(r"[^0-9\.,]", "", val_text)
-
-                if "." in val_text and "," in val_text:
-                    if val_text.rfind(".") > val_text.rfind(","):
-                        val_text = val_text.replace(",", "")
-                    else:
-                        val_text = val_text.replace(".", "").replace(",", ".")
-                elif "," in val_text:
-                    val_text = val_text.replace(".", "").replace(",", ".")
-                else:
-                    val_text = val_text.replace(",", "")
-
-                try:
-                    v = float(val_text)
-                    out["valor"] = f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-                except Exception:
-                    out["valor"] = val_text
+        m_val = re.search(r"VALOR TOTAL DO MANIFESTO\s*[:\-]?\s*([\d\.,]+)", ocrL or "")
+        if m_val:
+            val = m_val.group(1)
+            val = val.replace(".", "").replace(",", ".")
+            try:
+                valor = float(val)
+                out["valor"] = f"{valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+            except:
+                out["valor"] = val
 
     # Volumes
     if not out["volumes"]:
-        m_vol = re.search(r"\bVOLUMES?\b\s*[:\-]?\s*([0-9]{1,6})\b", ocrL or "", re.I)
+        m_vol = re.search(r"\bVOLUMES?\b\s*[:\-]?\s*([0-9]{1,6})\b", ocrL or "")
         if m_vol:
             out["volumes"] = clean_int(m_vol.group(1))
 
-    # Destino (fallback pelo OCR se não veio do texto)
+    # Fallback destino pelo OCR
     if not out["destino"]:
-        mds = list(re.finditer(r"([A-ZÇÃÕÉÍÓÚÂÊÔÜ ]+)\s*-\s*([A-Z]{2})", ocrL or ""))
-        for m in reversed(mds):
-            cidade, uf = m.groups()
-            if uf.upper() in UF_VALIDAS:
-                out["destino"] = f"{cidade.strip().upper()} - {uf.upper()}"
-                break
-
-    # Debug recolhível
-    if want_debug:
-        with st.expander("🔍 Mostrar Debug Completo do OCR", expanded=False):
-            st.markdown("### 🧠 Texto Bruto Extraído (para diagnóstico)")
-            with st.expander("🗂️ OCR — 1ª Página", expanded=False):
-                st.code(out["debug"].get("OCR_1a_PAG", "(sem texto)"))
-            with st.expander("📄 OCR — Última Página", expanded=False):
-                st.code(out["debug"].get("OCR_ULTIMA_PAG", "(sem texto)"))
+        mds = list(re.finditer(r"([A-ZÇÃÕÉÍÓÚÂÊÔÜ\s]+?)\s*-\s*([A-Z]{2})", ocrL or ""))
+        if mds:
+            cidade, uf = mds[-1].groups()
+            out["destino"] = f"{cidade.strip().upper()} - {uf.upper()}"
 
     return out
 
 # ==========================
-#  INTERFACE
+#  INTERFACE STREAMLIT
 # ==========================
 st.title("📦 Leitor de Manifestos Jadlog")
-st.caption("Extrai Manifesto, Data, Destino, Valor Total e Quantidade (Volumes) — com OCR de fallback quando necessário.")
+st.caption("Extrai Manifesto, Data, Destino, Valor Total e Volumes — com OCR inteligente.")
 
 responsavel = st.text_input("Responsável", placeholder="Digite o nome completo")
 want_debug = st.checkbox("Mostrar debug do OCR (texto bruto)", value=False)
 
-files = st.file_uploader("Envie um ou mais PDFs de manifesto", type=["pdf"], accept_multiple_files=True)
+files = st.file_uploader("Envie PDFs do manifesto", type=["pdf"], accept_multiple_files=True)
 
 if files:
     linhas = []
+
     for f in files:
         try:
-            f_bytes = f.read()
-            result = process_pdf(f_bytes, want_debug=want_debug)
+            pdf_bytes = f.read()
+            result = process_pdf(pdf_bytes, want_debug=want_debug)
 
-            # ---- Linha no formato final solicitado ----
             linhas.append({
                 "Data": result["data"],
                 "Manifesto": result["manifesto"],
                 "Destino": result["destino"],
-                "Referência": "",  # se preferir, use f.name
+                "Referência": "",
                 "Responsável": (responsavel or "").upper(),
                 "Valor total": result["valor"],
                 "Quantidade": result["volumes"],
             })
 
             ok = all([result["manifesto"], result["data"], result["destino"]])
-            st.success(f"✅ {f.name} | {result['destino'] or 'Destino indefinido'}") if ok \
-                else st.warning(f"⚠️ {f.name} — faltou algum campo")
-        except Exception:
-            # silencioso: não exibe banner vermelho
-            continue
+            if ok:
+                st.success(f"✅ {f.name} | {result['destino']}")
+            else:
+                st.warning(f"⚠️ {f.name} — faltou algum campo")
 
-    # ---- DataFrame na ordem definida ----
-    df = pd.DataFrame(
-        linhas,
-        columns=["Data", "Manifesto", "Destino", "Referência", "Responsável", "Valor total", "Quantidade"]
-    )
+        except Exception as e:
+            st.error(f"Erro ao processar {f.name}: {e}")
 
+    df = pd.DataFrame(linhas)
     st.subheader("Prévia — MANIFESTOS")
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.dataframe(df, hide_index=True, use_container_width=True)
 
     buf = io.BytesIO()
     df.to_excel(buf, index=False, engine="openpyxl")
     buf.seek(0)
+
     st.download_button(
         "📥 Baixar Planilha Operacional",
         data=buf,
         file_name=f"OPERACIONAL_{datetime.now().strftime('%Y-%m-%d')}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
 else:
-    st.info("Envie 1 ou mais PDFs de manifesto para extrair automaticamente.")
+    st.info("Envie 1 ou mais PDFs para extrair informações automaticamente.")
