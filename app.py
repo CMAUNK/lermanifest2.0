@@ -107,13 +107,13 @@ def extract_data_hora_from_head(first_page_text: str):
     return f"{int(dia):02d}/{meses.get(mes_txt.lower(),'')}/{ano}", _hora
 
 # ==========================
-#  NOVA FUNÇÃO — CORRIGIDA
+#  NOVA FUNÇÃO — DESTINO FIXADO
 # ==========================
 def extract_manifesto_destino_from_text(full_text: str):
     norm = normalize(full_text or "").upper()
 
     # Manifesto
-    m = re.search(r"\b(?:NUM[EÉ]RO|N[ºO])\s*[:\-]?\s*(\d{8,})", norm, re.I)
+    m = re.search(r"\b(?:NUM[EÉ]RO|N[ºO])\s*[:\-]?\s*(\d{8,})", norm)
     manifesto = m.group(1) if m else ""
     if not manifesto:
         m2 = re.search(r"\b(\d{10,15})\b", norm)
@@ -121,14 +121,14 @@ def extract_manifesto_destino_from_text(full_text: str):
 
     destino = ""
 
-    # 1) Detecção robusta de Sxx
+    # 1) Sxx robusto
     rota_match = re.search(r"\bS\s*[-\/]?\s*0*([0-9]{1,2})\b", norm)
     if rota_match:
         rota_code = "S" + str(int(rota_match.group(1)))
         if rota_code in ROTA_CO_MAP:
             destino = ROTA_CO_MAP[rota_code]
 
-    # 2) Busca direta por cada chave do mapa (fallback)
+    # 2) fallback direto
     if not destino:
         for k, v in ROTA_CO_MAP.items():
             pat = fr"S\s*[-\/]?\s*0*{k[1:]}"
@@ -136,9 +136,9 @@ def extract_manifesto_destino_from_text(full_text: str):
                 destino = v
                 break
 
-    # 3) Último recurso: CIDADE - UF
+    # 3) fallback cidade-UF
     if not destino:
-        mds = list(re.finditer(r"([A-ZÇÃÕÉÍÓÚÂÊÔÜ0-9 \.\-]+?)\s*-\s*([A-Z]{2})", norm))
+        mds = list(re.finditer(r"([A-ZÇÃÕÉÍÓÚÂÊÔÜ \.\-]+?)\s*-\s*([A-Z]{2})", norm))
         for m in reversed(mds):
             cidade, uf = m.groups()
             if uf.upper() in UF_VALIDAS:
@@ -215,47 +215,38 @@ def process_pdf(file_bytes: bytes, want_debug: bool = False):
                 except:
                     out["valor"] = val_text
 
-    # Volumes
-    # ===== NOVO SISTEMA DE VOLUMES — SOMA TODAS AS PÁGINAS =====
-total_volumes = 0
+    # ==========================
+    #  SOMA DE VOLUMES — CORRIGIDO
+    # ==========================
 
-# 1) OCR de todas as páginas
-images = convert_from_bytes(file_bytes, dpi=500, fmt="jpeg")
-for img in images:
-    img_p = pil_preprocess(img)
-    txt = ocr_image(img_p, psm=6)
-    if len(txt.strip()) < 10:
-        txt = ocr_image(img_p, psm=3)
+    total_volumes = 0
 
-    # 2) Procura por linhas contendo volumes
-    # Exemplos detectados:
-    #   "44"
-    #   "Volumes: 44"
-    #   "31.13 74.00"  → linha do total do PDF
-    #   "44 19.16 1"   → aparece junto com peso e pacote
-    #
-    # Primeiro tenta o padrão oficial:
-    m1 = re.search(r"\bVOLUMES?\b\s*[:\-]?\s*([0-9]{1,6})\b", txt)
-    if m1:
-        total_volumes += int(m1.group(1))
-        continue
+    images = convert_from_bytes(file_bytes, dpi=500, fmt="jpeg")
+    for img in images:
+        img_p = pil_preprocess(img)
+        txt = ocr_image(img_p, psm=6)
+        if len(txt.strip()) < 10:
+            txt = ocr_image(img_p, psm=3)
 
-    # Padrão genérico da última linha do PDF (ex: "31.13 74.00")
-    m2 = re.search(r"\b([0-9]{1,5})\s*\.\s*[0-9]{1,3}\b", txt)
-    # Este captura "74.00" = total de volumes da página
-    if m2:
-        try:
-            total_volumes += int(m2.group(1))
+        # padrão oficial: "Volumes: 44"
+        m1 = re.search(r"\bVOLUMES?\b\s*[:\-]?\s*([0-9]{1,6})\b", txt)
+        if m1:
+            total_volumes += int(m1.group(1))
             continue
-        except:
-            pass
 
-# 3) Salva o total
-if total_volumes > 0:
-    out["volumes"] = str(total_volumes)
+        # padrão do total final "31.13 74.00"
+        m2 = re.search(r"\b([0-9]{1,5})\s*\.\s*[0-9]{1,3}\b", txt)
+        if m2:
+            try:
+                total_volumes += int(m2.group(1))
+                continue
+            except:
+                pass
 
+    if total_volumes > 0:
+        out["volumes"] = str(total_volumes)
 
-    # Destino fallback OCR
+    # Destino OCR fallback
     if not out["destino"]:
         mds = list(re.finditer(r"([A-ZÇÃÕÉÍÓÚÂÊÔÜ ]+)\s*-\s*([A-Z]{2})", ocrL or ""))
         for m in reversed(mds):
@@ -329,4 +320,3 @@ if files:
 
 else:
     st.info("Envie 1 ou mais PDFs de manifesto para extrair automaticamente.")
-
