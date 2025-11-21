@@ -1,11 +1,11 @@
 # app.py
 # -----------------------------------------------
-# Leitor de Manifestos Jadlog — versão otimizada e corrigida
+# Leitor de Manifestos Jadlog — OCR Final (v4.7)
 # - Extrai Manifesto, Data, Destino, Valor Total e Quantidade (Volumes)
 # - Usa texto nativo do PDF quando possível (pdfplumber)
-# - Faz OCR rápido (300 dpi) e fallback (500 dpi) quando necessário
-# - Soma volumes de todas as páginas
-# - Interface Streamlit com barra de progresso e botão limpar
+# - Faz OCR de 1ª e última página como fallback (pytesseract + pdf2image)
+# - Mapeamento de COs via códigos Sxx
+# - Planilha final: Data; Manifesto; Destino; Referência; Responsável; Valor total; Quantidade
 # -----------------------------------------------
 
 import io
@@ -21,11 +21,11 @@ from PIL import ImageOps, ImageFilter
 import streamlit as st
 
 # ==========================
-#  CONFIG DA PÁGINA
+#  CONFIGURAÇÃO DA PÁGINA
 # ==========================
 st.set_page_config(page_title="Leitor de Manifestos Jadlog", page_icon="🚛", layout="centered")
-
-st.markdown("""
+st.markdown(
+    """
 <style>
 .stDownloadButton > button {
     background-color: #d62828;
@@ -39,10 +39,12 @@ st.markdown("""
     background-color: #6c757d;
 }
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 # ==========================
-#  MAPAS
+#  CONSTANTES / MAPAS
 # ==========================
 ROTA_CO_MAP = {
     "S27": "CO RIO DE JANEIRO 05",
@@ -53,11 +55,9 @@ ROTA_CO_MAP = {
     "S41": "CO RIO DE JANEIRO 08",
     "S49": "CO RIO DE JANEIRO 07",
 }
-
 UF_VALIDAS = {
-    "AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA", "MG", "MS",
-    "MT", "PA", "PB", "PE", "PI", "PR", "RJ", "RN", "RO", "RR", "RS",
-    "SC", "SE", "SP", "TO"
+    "AC", "AL", "AM", "AP", "BA", "CE", "DF", "ES", "GO", "MA", "MG", "MS", "MT", "PA",
+    "PB", "PE", "PI", "PR", "RJ", "RN", "RO", "RR", "RS", "SC", "SE", "SP", "TO"
 }
 
 # ==========================
@@ -71,11 +71,9 @@ def clean_int(s: str) -> str:
     return re.sub(r"[^\d]", "", s or "")
 
 def pil_preprocess(img):
-    """Pré-processamento para OCR: grayscale, autocontrast, sharpen, binarize leve."""
     g = img.convert("L")
     g = ImageOps.autocontrast(g)
     g = g.filter(ImageFilter.SHARPEN)
-    # binarize leve: mantém contraste, evita perder pequenos detalhes
     g = g.point(lambda x: 255 if x > 180 else 0)
     return g
 
@@ -83,36 +81,14 @@ def ocr_image(img, psm=6):
     cfg = f"--psm {psm} --oem 3"
     return pytesseract.image_to_string(img, lang="por+eng", config=cfg).upper()
 
-def ocr_page_quick(img):
-    """Tenta PSM=6, se texto curto tenta PSM=3."""
-    txt = ocr_image(img, psm=6)
-    if len(txt.strip()) >= 10:
-        return txt
-    return ocr_image(img, psm=3)
-
-def convert_pdf_fast(file_bytes: bytes, dpi=300):
-    """Converte PDF para imagens em dpi especificado. Fallback 500 dpi se falhar."""
-    try:
-        images = convert_from_bytes(file_bytes, dpi=dpi, fmt="jpeg")
-        if images:
-            return images
-    except Exception:
-        pass
-    # fallback
-    return convert_from_bytes(file_bytes, dpi=500, fmt="jpeg")
-
 # ==========================
-#  EXTRAÇÃO DE TEXTO (texto nativo)
+#  EXTRAÇÃO DE TEXTO
 # ==========================
 def read_pdf_text(file_bytes: bytes):
     pages_txt = []
-    try:
-        with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
-            for p in pdf.pages:
-                pages_txt.append(p.extract_text() or "")
-    except Exception:
-        # se pdfplumber falhar, retorna lista vazia
-        return []
+    with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+        for p in pdf.pages:
+            pages_txt.append(p.extract_text() or "")
     return pages_txt
 
 def extract_data_hora_from_head(first_page_text: str):
@@ -124,14 +100,14 @@ def extract_data_hora_from_head(first_page_text: str):
     if not m:
         return "", ""
     meses = {
-        "jan": "01","fev":"02","mar":"03","abr":"04","mai":"05","jun":"06",
-        "jul":"07","ago":"08","set":"09","out":"10","nov":"11","dez":"12"
+        "jan": "01", "fev": "02", "mar": "03", "abr": "04", "mai": "05", "jun": "06",
+        "jul": "07", "ago": "08", "set": "09", "out": "10", "nov": "11", "dez": "12"
     }
-    dia, mes_txt, ano, hora = m.groups()
-    return f"{int(dia):02d}/{meses.get(mes_txt.lower(),'')}/{ano}", hora
+    dia, mes_txt, ano, _hora = m.groups()
+    return f"{int(dia):02d}/{meses.get(mes_txt.lower(),'')}/{ano}", _hora
 
 # ==========================
-#  EXTRAÇÃO — MANIFESTO + DESTINO
+#  NOVA FUNÇÃO — DESTINO FIXADO
 # ==========================
 def extract_manifesto_destino_from_text(full_text: str):
     norm = normalize(full_text or "").upper()
@@ -145,14 +121,14 @@ def extract_manifesto_destino_from_text(full_text: str):
 
     destino = ""
 
-    # 1) Detecção robusta de Sxx (aceita S27, S 27, S-27, S/27, S027)
+    # 1) Sxx robusto
     rota_match = re.search(r"\bS\s*[-\/]?\s*0*([0-9]{1,2})\b", norm)
     if rota_match:
         rota_code = "S" + str(int(rota_match.group(1)))
         if rota_code in ROTA_CO_MAP:
             destino = ROTA_CO_MAP[rota_code]
 
-    # 2) fallback: buscar diretamente cada chave do mapa
+    # 2) fallback direto
     if not destino:
         for k, v in ROTA_CO_MAP.items():
             pat = fr"S\s*[-\/]?\s*0*{k[1:]}"
@@ -160,10 +136,10 @@ def extract_manifesto_destino_from_text(full_text: str):
                 destino = v
                 break
 
-    # 3) último recurso: "CIDADE - UF"
+    # 3) fallback cidade-UF
     if not destino:
-        matches = list(re.finditer(r"([A-ZÇÃÕÉÍÓÚÂÊÔÜ0-9 \.\-]+?)\s*-\s*([A-Z]{2})", norm))
-        for m in reversed(matches):
+        mds = list(re.finditer(r"([A-ZÇÃÕÉÍÓÚÂÊÔÜ \.\-]+?)\s*-\s*([A-Z]{2})", norm))
+        for m in reversed(mds):
             cidade, uf = m.groups()
             if uf.upper() in UF_VALIDAS:
                 destino = f"{cidade.strip().upper()} - {uf.upper()}"
@@ -172,298 +148,175 @@ def extract_manifesto_destino_from_text(full_text: str):
     return manifesto, destino
 
 # ==========================
-#  HELPERS PARA VALORES
+#  OCR
 # ==========================
-def find_monetary_candidates(text: str):
-    """
-    Retorna lista de strings que parecem valores monetários ou números com separadores.
-    Ex: '26,475.41', '26.475,41', '26475.41', '26 475,41'
-    """
-    if not text:
-        return []
-    # busca padrões com grupos de milhares e decimais
-    pattern = r"(?:(?:\d{1,3}(?:[.\s]\d{3})*(?:[,\.\s]\d{1,2})?)|\d+[\.,]\d+)"
-    matches = re.findall(pattern, text)
-    # dedupe e strip
-    seen = []
-    for m in matches:
-        mm = m.strip()
-        if mm and mm not in seen:
-            seen.append(mm)
-    return seen
-
-def try_parse_amount(s: str):
-    """
-    Tenta converter string numérica em float (valor em unidades),
-    tentando interpretar corretamente separadores.
-    Retorna float ou None.
-    """
-    if not s:
-        return None
-    cur = s.strip().replace(" ", "")
-    # remove non-digit, dot, comma
-    cur = re.sub(r"[^\d\.,]", "", cur)
-    # if both '.' and ',' present, decide by last occurrence
-    if "." in cur and "," in cur:
-        if cur.rfind(",") > cur.rfind("."):
-            # comma likely decimal separator: remove dots (thousands), replace comma by dot
-            try:
-                norm = cur.replace(".", "").replace(",", ".")
-                return float(norm)
-            except:
-                return None
-        else:
-            # dot likely decimal separator: remove commas
-            try:
-                norm = cur.replace(",", "")
-                return float(norm)
-            except:
-                return None
-    # only comma
-    if "," in cur and "." not in cur:
-        try:
-            return float(cur.replace(".", "").replace(",", "."))
-        except:
-            return None
-    # only dot
-    if "." in cur and "," not in cur:
-        try:
-            return float(cur.replace(",", ""))
-        except:
-            return None
-    # only digits
-    try:
-        return float(cur)
-    except:
-        return None
+def ocr_page_bytes(file_bytes: bytes, page_index="first", dpi=500):
+    images = convert_from_bytes(file_bytes, dpi=dpi, fmt="jpeg")
+    if not images:
+        return None, ""
+    img = images[0] if page_index == "first" else images[-1]
+    img_p = pil_preprocess(img)
+    txt = ocr_image(img_p, psm=6)
+    if len(txt.strip()) < 10:
+        txt = ocr_image(img_p, psm=3)
+    return img_p, txt
 
 # ==========================
-#  PROCESSAMENTO DE CADA PDF
+#  PROCESSAMENTO
 # ==========================
-def process_pdf(file_bytes: bytes, progress_bar=None, want_debug: bool = False):
-    """
-    Processa um PDF inteiro e retorna dicionário com campos:
-    manifesto, data, destino, valor, volumes
-    """
-    out = {"manifesto": "", "data": "", "destino": "", "valor": "", "volumes": ""}
+def process_pdf(file_bytes: bytes, want_debug: bool = False):
+    out = {"manifesto": "", "data": "", "hora": "", "destino": "", "valor": "", "volumes": "", "debug": {}}
 
-    # 1) Texto nativo (se disponível)
     pages_txt = read_pdf_text(file_bytes)
     if pages_txt:
-        out["data"], _hora = extract_data_hora_from_head(pages_txt[0])
+        out["data"], out["hora"] = extract_data_hora_from_head(pages_txt[0])
         manifesto, destino = extract_manifesto_destino_from_text("\n".join(pages_txt))
         out["manifesto"], out["destino"] = manifesto, destino
 
-    # 2) Converter p/ imagens (300dpi rápido, fallback 500dpi)
-    images = convert_pdf_fast(file_bytes, dpi=300)
+    if not out["manifesto"]:
+        _img1, ocr1 = ocr_page_bytes(file_bytes, page_index="first", dpi=500)
+        out["debug"]["OCR_1a_PAG"] = ocr1
+        m = re.search(r"\b(?:NUM[EÉ]RO|N[ºO])\s*[:\-]?\s*(\d{8,})", ocr1)
+        if not m:
+            m = re.search(r"\b(\d{10,15})\b", ocr1)
+        if m:
+            out["manifesto"] = m.group(1)
 
-    # 3) Extrair volumes somando todas páginas
+    _imgL, ocrL = ocr_page_bytes(file_bytes, page_index="last", dpi=500)
+    out["debug"]["OCR_ULTIMA_PAG"] = ocrL
+
+    # Valor total
+    if not out["valor"]:
+        linha_valor = ""
+        for linha in (ocrL or "").splitlines():
+            if "VALOR TOTAL DO MANIFESTO" in linha:
+                linha_valor = linha.strip()
+                break
+        if linha_valor:
+            m_val = re.search(r"VALOR\s+TOTAL\s+DO\s+MANIFESTO\s*[:\-]?\s*([\d\s\.,]+)", linha_valor)
+            if m_val:
+                val_text = m_val.group(1)
+                val_text = val_text.replace(" ", "").strip()
+                val_text = re.sub(r"[^0-9\.,]", "", val_text)
+
+                if "." in val_text and "," in val_text:
+                    if val_text.rfind(".") > val_text.rfind(","):
+                        val_text = val_text.replace(",", "")
+                    else:
+                        val_text = val_text.replace(".", "").replace(",", ".")
+                elif "," in val_text:
+                    val_text = val_text.replace(".", "").replace(",", ".")
+                else:
+                    val_text = val_text.replace(",", "")
+
+                try:
+                    v = float(val_text)
+                    out["valor"] = f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                except:
+                    out["valor"] = val_text
+
+    # ==========================
+    #  SOMA DE VOLUMES — CORRIGIDO
+    # ==========================
+
     total_volumes = 0
-    ocr_texts_per_page = []  # para debug/fallback do valor
-    for idx, img in enumerate(images):
-        if progress_bar:
-            try:
-                progress_bar.progress((idx + 1) / len(images))
-            except Exception:
-                pass
 
+    images = convert_from_bytes(file_bytes, dpi=500, fmt="jpeg")
+    for img in images:
         img_p = pil_preprocess(img)
-        txt = ocr_page_quick(img_p)
-        ocr_texts_per_page.append(txt)
+        txt = ocr_image(img_p, psm=6)
+        if len(txt.strip()) < 10:
+            txt = ocr_image(img_p, psm=3)
 
-        # Primeiro busca explicitamente "VOLUMES: N" ou "Volumes N"
-        m_vol = re.search(r"\bVOLUMES?\b\s*[:\-]?\s*([0-9]{1,6})\b", txt, re.I)
-        if m_vol:
+        # padrão oficial: "Volumes: 44"
+        m1 = re.search(r"\bVOLUMES?\b\s*[:\-]?\s*([0-9]{1,6})\b", txt)
+        if m1:
+            total_volumes += int(m1.group(1))
+            continue
+
+        # padrão do total final "31.13 74.00"
+        m2 = re.search(r"\b([0-9]{1,5})\s*\.\s*[0-9]{1,3}\b", txt)
+        if m2:
             try:
-                total_volumes += int(m_vol.group(1))
+                total_volumes += int(m2.group(1))
                 continue
-            except Exception:
-                pass
-
-        # Em alguns modelos o final da página tem "31.13 74.00" -> pegar 74
-        m_total_like = re.search(r"\b([0-9]{1,5})\s*\.\s*[0-9]{1,3}\b", txt)
-        if m_total_like:
-            try:
-                total_volumes += int(m_total_like.group(1))
-                continue
-            except Exception:
-                pass
-
-        # Algumas linhas mostram "44 19.16 1" -> capturar primeiro número isolado
-        m_first_num = re.search(r"^\s*([0-9]{1,4})\b", txt)
-        if m_first_num:
-            try:
-                num = int(m_first_num.group(1))
-                # heurística: se num plausível (<= 5000) e não estiver repetido com peso, adicionar
-                if num > 0 and num < 5000:
-                    total_volumes += num
-                    continue
-            except Exception:
+            except:
                 pass
 
     if total_volumes > 0:
         out["volumes"] = str(total_volumes)
 
-    # 4) VALOR TOTAL — TENTAR PDFNATIVE (última página) PRIMEIRO, DEPOIS OCR
-    valor_encontrado = ""
-
-    # 4.1 tentar com pdfplumber (última página)
-    last_text = ""
-    try:
-        with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
-            try:
-                last_text = pdf.pages[-1].extract_text() or ""
-            except Exception:
-                last_text = ""
-    except Exception:
-        last_text = ""
-
-    # coleta candidatos do texto nativo
-    candidates = []
-    if last_text:
-        # procurar explicitamente próximas ocorrências à expressão VALOR
-        # pega linha inteira onde apareça VALOR
-        for line in last_text.splitlines():
-            if re.search(r"VALOR\s+TOTAL", line, re.I) or re.search(r"VALOR\s+TOTAL\s+DO", line, re.I) or re.search(r"VALOR\s*:", line, re.I):
-                candidates += find_monetary_candidates(line)
-        # se não achar via VALOR, coletar todos candidatos na última página
-        if not candidates:
-            candidates = find_monetary_candidates(last_text)
-
-    # 4.2 fallback OCR última página (se não achou candidatos ou quiser reforçar)
-    if not candidates:
-        try:
-            last_img = pil_preprocess(images[-1])
-            ocr_last = ocr_page_quick(last_img)
-            # prefer lines near "VALOR"
-            for line in ocr_last.splitlines():
-                if re.search(r"VALOR\s+TOTAL", line, re.I) or re.search(r"VALOR\s*:", line, re.I):
-                    candidates += find_monetary_candidates(line)
-            if not candidates:
-                candidates = find_monetary_candidates(ocr_last)
-        except Exception:
-            candidates = []
-
-    # 4.3 interpretar candidatos e escolher o melhor
-    parsed = []
-    for s in candidates:
-        v = try_parse_amount(s)
-        if v is not None:
-            parsed.append((s, v))
-    chosen_value = None
-    if parsed:
-        # priorizar candidatos extraídos de linhas que contenham "VALOR" (se existirem)
-        valor_pref = []
-        if last_text:
-            for s, v in parsed:
-                # if s appears in a line with 'VALOR' prefer it
-                for line in last_text.splitlines():
-                    if s in line and re.search(r"VALOR", line, re.I):
-                        valor_pref.append((s, v))
-            if valor_pref:
-                # escolhe o maior entre preferenciais
-                chosen_value = max(valor_pref, key=lambda x: x[1])[1]
-        if chosen_value is None:
-            # escolhe o maior valor plausível (normalmente o total é o maior número da página)
-            chosen_value = max(parsed, key=lambda x: x[1])[1]
-
-    # 4.4 formatar valor no padrão BR
-    if chosen_value is not None:
-        try:
-            val_float = float(chosen_value)
-            out["valor"] = f"{val_float:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
-        except Exception:
-            # fallback: armazena o texto bruto do candidato escolhido
-            out["valor"] = str(chosen_value)
-
-    # 5) DESTINO fallback por OCR da última página (se ainda não detectado)
+    # Destino OCR fallback
     if not out["destino"]:
-        ocr_last_all = ""
-        try:
-            ocr_last_all = ocr_page_quick(pil_preprocess(images[-1]))
-        except Exception:
-            ocr_last_all = ""
-        if ocr_last_all:
-            mds = list(re.finditer(r"([A-ZÇÃÕÉÍÓÚÂÊÔÜ0-9 \.\-]+?)\s*-\s*([A-Z]{2})", ocr_last_all))
-            for m in reversed(mds):
-                cidade, uf = m.groups()
-                if uf.upper() in UF_VALIDAS:
-                    out["destino"] = f"{cidade.strip().upper()} - {uf.upper()}"
-                    break
+        mds = list(re.finditer(r"([A-ZÇÃÕÉÍÓÚÂÊÔÜ ]+)\s*-\s*([A-Z]{2})", ocrL or ""))
+        for m in reversed(mds):
+            cidade, uf = m.groups()
+            if uf.upper() in UF_VALIDAS:
+                out["destino"] = f"{cidade.strip().upper()} - {uf.upper()}"
+                break
 
-    # 6) debug (opcional)
+    # Debug
     if want_debug:
-        out["debug"] = {
-            "pages_txt_count": len(pages_txt),
-            "last_text_preview": last_text[:500] if last_text else "",
-            "ocr_last_preview": ocr_texts_per_page[-1][:500] if ocr_texts_per_page else "",
-            "candidates": candidates,
-            "parsed": parsed,
-        }
+        with st.expander("🔍 Mostrar Debug Completo do OCR", expanded=False):
+            st.markdown("### 🧠 Texto Bruto Extraído (para diagnóstico)")
+            with st.expander("🗂️ OCR — 1ª Página", expanded=False):
+                st.code(out["debug"].get("OCR_1a_PAG", "(sem texto)"))
+            with st.expander("📄 OCR — Última Página", expanded=False):
+                st.code(out["debug"].get("OCR_ULTIMA_PAG", "(sem texto)"))
 
     return out
 
 # ==========================
-#  INTERFACE STREAMLIT
+#  INTERFACE
 # ==========================
-st.title("📦 Leitor de Manifestos Jadlog — OTIMIZADO")
-st.caption("OCR rápido, soma de volumes em todas páginas, extração robusta do valor e UI melhorada.")
+st.title("📦 Leitor de Manifestos Jadlog")
+st.caption("Extrai Manifesto, Data, Destino, Valor Total e Quantidade (Volumes) — com OCR de fallback quando necessário.")
 
 responsavel = st.text_input("Responsável", placeholder="Digite o nome completo")
+want_debug = st.checkbox("Mostrar debug do OCR (texto bruto)", value=False)
 
-if "linhas" not in st.session_state:
-    st.session_state["linhas"] = []
-
-if st.button("🧹 Limpar Tabela"):
-    st.session_state["linhas"] = []
-
-files = st.file_uploader("Envie PDFs de manifesto", type=["pdf"], accept_multiple_files=True)
+files = st.file_uploader("Envie um ou mais PDFs de manifesto", type=["pdf"], accept_multiple_files=True)
 
 if files:
-    total_pdf = len(files)
-    total_volumes_geral = 0
-
-    for idx, f in enumerate(files):
-        st.write(f"📄 Processando: **{f.name}** ({idx+1}/{total_pdf})")
-        progress = st.progress(0)
-
-        f_bytes = f.read()
-        result = process_pdf(f_bytes, progress_bar=progress)
-
-        st.session_state["linhas"].append({
-            "Data": result.get("data", ""),
-            "Manifesto": result.get("manifesto", ""),
-            "Destino": result.get("destino", ""),
-            "Referência": "",
-            "Responsável": (responsavel or "").upper(),
-            "Valor total": result.get("valor", ""),
-            "Quantidade": result.get("volumes", ""),
-        })
-
+    linhas = []
+    for f in files:
         try:
-            total_volumes_geral += int(result.get("volumes") or 0)
+            f_bytes = f.read()
+            result = process_pdf(f_bytes, want_debug=want_debug)
+
+            linhas.append({
+                "Data": result["data"],
+                "Manifesto": result["manifesto"],
+                "Destino": result["destino"],
+                "Referência": "",
+                "Responsável": (responsavel or "").upper(),
+                "Valor total": result["valor"],
+                "Quantidade": result["volumes"],
+            })
+
+            ok = all([result["manifesto"], result["data"], result["destino"]])
+            st.success(f"✅ {f.name} | {result['destino'] or 'Destino indefinido'}") if ok \
+                else st.warning(f"⚠️ {f.name} — faltou algum campo")
         except Exception:
-            pass
+            continue
 
-        st.success(f"✔️ {f.name} concluído — {result.get('volumes','0')} volumes")
+    df = pd.DataFrame(
+        linhas,
+        columns=["Data", "Manifesto", "Destino", "Referência", "Responsável", "Valor total", "Quantidade"]
+    )
 
-    st.info(f"📊 Arquivos processados: {total_pdf} | Total de volumes: {total_volumes_geral}")
-
-# Mostrar tabela
-if st.session_state["linhas"]:
-    df = pd.DataFrame(st.session_state["linhas"], columns=["Data", "Manifesto", "Destino", "Referência", "Responsável", "Valor total", "Quantidade"])
     st.subheader("Prévia — MANIFESTOS")
     st.dataframe(df, use_container_width=True, hide_index=True)
 
     buf = io.BytesIO()
     df.to_excel(buf, index=False, engine="openpyxl")
     buf.seek(0)
-
     st.download_button(
         "📥 Baixar Planilha Operacional",
         data=buf,
         file_name=f"OPERACIONAL_{datetime.now().strftime('%Y-%m-%d')}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
 else:
-    st.info("Envie PDFs para iniciar o processamento.")
+    st.info("Envie 1 ou mais PDFs de manifesto para extrair automaticamente.")
