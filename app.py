@@ -216,10 +216,44 @@ def process_pdf(file_bytes: bytes, want_debug: bool = False):
                     out["valor"] = val_text
 
     # Volumes
-    if not out["volumes"]:
-        m_vol = re.search(r"\bVOLUMES?\b\s*[:\-]?\s*([0-9]{1,6})\b", ocrL or "")
-        if m_vol:
-            out["volumes"] = clean_int(m_vol.group(1))
+    # ===== NOVO SISTEMA DE VOLUMES — SOMA TODAS AS PÁGINAS =====
+total_volumes = 0
+
+# 1) OCR de todas as páginas
+images = convert_from_bytes(file_bytes, dpi=500, fmt="jpeg")
+for img in images:
+    img_p = pil_preprocess(img)
+    txt = ocr_image(img_p, psm=6)
+    if len(txt.strip()) < 10:
+        txt = ocr_image(img_p, psm=3)
+
+    # 2) Procura por linhas contendo volumes
+    # Exemplos detectados:
+    #   "44"
+    #   "Volumes: 44"
+    #   "31.13 74.00"  → linha do total do PDF
+    #   "44 19.16 1"   → aparece junto com peso e pacote
+    #
+    # Primeiro tenta o padrão oficial:
+    m1 = re.search(r"\bVOLUMES?\b\s*[:\-]?\s*([0-9]{1,6})\b", txt)
+    if m1:
+        total_volumes += int(m1.group(1))
+        continue
+
+    # Padrão genérico da última linha do PDF (ex: "31.13 74.00")
+    m2 = re.search(r"\b([0-9]{1,5})\s*\.\s*[0-9]{1,3}\b", txt)
+    # Este captura "74.00" = total de volumes da página
+    if m2:
+        try:
+            total_volumes += int(m2.group(1))
+            continue
+        except:
+            pass
+
+# 3) Salva o total
+if total_volumes > 0:
+    out["volumes"] = str(total_volumes)
+
 
     # Destino fallback OCR
     if not out["destino"]:
@@ -295,3 +329,4 @@ if files:
 
 else:
     st.info("Envie 1 ou mais PDFs de manifesto para extrair automaticamente.")
+
